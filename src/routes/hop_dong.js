@@ -13,13 +13,31 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
+// Helper to fix UTF-8 filenames improperly decoded as latin1 by multer
+function fixUtf8FileName(str) {
+  if (!str || typeof str !== 'string') return '';
+  try {
+    if ([...str].some(c => c.charCodeAt(0) > 255)) {
+      return str;
+    }
+    const decoded = Buffer.from(str, 'latin1').toString('utf8');
+    if (decoded && !decoded.includes('\uFFFD') && decoded !== str) {
+      return decoded;
+    }
+    return str;
+  } catch (e) {
+    return str;
+  }
+}
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, uploadsDir);
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    const ext = path.extname(file.originalname);
+    const cleanOriginalName = fixUtf8FileName(file.originalname);
+    const ext = path.extname(cleanOriginalName) || path.extname(file.originalname);
     cb(null, 'hd-' + uniqueSuffix + ext);
   }
 });
@@ -452,10 +470,11 @@ router.post('/', authMiddleware, authorize(['Ke_Hoach', 'Ban_Giam_Doc', 'Ke_Toan
     if (req.files && Array.isArray(req.files) && req.files.length > 0) {
       for (const f of req.files) {
         const filePath = `/uploads/contracts/${f.filename}`;
+        const cleanName = fixUtf8FileName(f.originalname) || f.originalname;
         await connection.query(
           `INSERT INTO hop_dong_file (id_hop_dong, ten_file, duong_dan, loai_file, kich_thuoc_bytes, nguoi_tao)
            VALUES (?, ?, ?, ?, ?, ?)`,
-          [contractId, f.originalname, filePath, f.mimetype, f.size, req.user?.ten_dang_nhap || 'system']
+          [contractId, cleanName, filePath, f.mimetype, f.size, req.user?.ten_dang_nhap || 'system']
         );
       }
     }
@@ -718,10 +737,11 @@ router.put('/:id', authMiddleware, authorize(['Ke_Hoach', 'Ban_Giam_Doc', 'Ke_To
     if (req.files && Array.isArray(req.files) && req.files.length > 0) {
       for (const f of req.files) {
         const filePath = `/uploads/contracts/${f.filename}`;
+        const cleanName = fixUtf8FileName(f.originalname) || f.originalname;
         await connection.query(
           `INSERT INTO hop_dong_file (id_hop_dong, ten_file, duong_dan, loai_file, kich_thuoc_bytes, nguoi_tao)
            VALUES (?, ?, ?, ?, ?, ?)`,
-          [contractId, f.originalname, filePath, f.mimetype, f.size, req.user?.ten_dang_nhap || 'system']
+          [contractId, cleanName, filePath, f.mimetype, f.size, req.user?.ten_dang_nhap || 'system']
         );
       }
     }
@@ -983,15 +1003,16 @@ router.post('/:id/files', authMiddleware, authorize(['Ke_Hoach', 'Ban_Giam_Doc',
     const savedFiles = [];
     for (const f of req.files) {
       const filePath = `/uploads/contracts/${f.filename}`;
+      const cleanName = fixUtf8FileName(f.originalname) || f.originalname;
       const [resInsert] = await connection.query(
         `INSERT INTO hop_dong_file (id_hop_dong, ten_file, duong_dan, loai_file, kich_thuoc_bytes, nguoi_tao)
          VALUES (?, ?, ?, ?, ?, ?)`,
-        [contractId, f.originalname, filePath, f.mimetype, f.size, req.user?.ten_dang_nhap || 'system']
+        [contractId, cleanName, filePath, f.mimetype, f.size, req.user?.ten_dang_nhap || 'system']
       );
       savedFiles.push({
         id: resInsert.insertId,
         id_hop_dong: contractId,
-        ten_file: f.originalname,
+        ten_file: cleanName,
         duong_dan: filePath,
         loai_file: f.mimetype,
         kich_thuoc_bytes: f.size

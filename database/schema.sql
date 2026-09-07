@@ -135,13 +135,15 @@ CREATE TABLE IF NOT EXISTS cong_trinh (
     ten_viet_tat VARCHAR(100),
     dia_chi VARCHAR(200),
     id_khach_hang INT,
+    id_linh_vuc_kinh_doanh INT,
     tong_ngan_sach DECIMAL(15, 2) DEFAULT 0,
     ngay_bat_dau DATE,
     ngay_ket_thuc DATE,
     trang_thai VARCHAR(50) DEFAULT 'Dang_Thi_Cong',
     nguoi_tao VARCHAR(100) NOT NULL,
     thoi_gian_tao DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (id_khach_hang) REFERENCES khach_hang(id)
+    FOREIGN KEY (id_khach_hang) REFERENCES khach_hang(id),
+    FOREIGN KEY (id_linh_vuc_kinh_doanh) REFERENCES linh_vuc_kinh_doanh(id)
 );
 
 -- 6. Hợp đồng Công trình & Bảo lãnh & Tạm ứng (Có lưu ngày hết hạn bảo lãnh phục vụ cảnh báo 15 ngày)

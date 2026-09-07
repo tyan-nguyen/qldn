@@ -83,8 +83,9 @@ async function initializeDatabase() {
         console.warn('Could not create files table: ', filesTableErr.message);
       }
 
-      // Ensure cong_trinh has ten_viet_tat column
+      // Ensure cong_trinh has ten_viet_tat & id_linh_vuc_kinh_doanh columns
       try { await connection.query(`ALTER TABLE cong_trinh ADD COLUMN ten_viet_tat VARCHAR(100) NULL`); } catch (e) {}
+      try { await connection.query(`ALTER TABLE cong_trinh ADD COLUMN id_linh_vuc_kinh_doanh INT NULL`); } catch (e) {}
 
       // Ensure phieu_xuat_kho has necessary columns for site materials export
       try { await connection.query(`ALTER TABLE phieu_xuat_kho ADD COLUMN id_yeu_cau_vat_tu INT NULL`); } catch (e) {}

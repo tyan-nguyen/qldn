@@ -580,9 +580,15 @@ router.get('/phieu-xuat', async (req, res) => {
       SELECT px.*,
              c.ten_cong_trinh,
              k_nguon.ten_kho AS ten_kho_nguon,
+             k_nguon.ten_kho AS ten_kho_xuat,
              k_tam.ten_kho AS ten_kho_tam,
              yc.ma_phieu AS ma_phieu_yeu_cau,
-             l.ten_lvkd AS ten_linh_vuc_kinh_doanh
+             l.ten_lvkd AS ten_linh_vuc_kinh_doanh,
+             COALESCE(px.thoi_gian_xuat, px.thoi_gian_tao) AS ngay_xuat,
+             (SELECT COUNT(*) FROM phieu_xuat_kho_chi_tiet pxct WHERE pxct.id_phieu_xuat_kho = px.id AND (pxct.da_xoa IS NULL OR pxct.da_xoa = 0)) AS tong_so_mat_hang,
+             (SELECT COALESCE(SUM(COALESCE(pxct.so_luong_xuat, pxct.so_luong, 0)), 0) FROM phieu_xuat_kho_chi_tiet pxct WHERE pxct.id_phieu_xuat_kho = px.id AND (pxct.da_xoa IS NULL OR pxct.da_xoa = 0)) AS tong_so_luong,
+             (SELECT COALESCE(SUM(COALESCE(pxct.so_luong_xuat, pxct.so_luong, 0)), 0) FROM phieu_xuat_kho_chi_tiet pxct WHERE pxct.id_phieu_xuat_kho = px.id AND (pxct.da_xoa IS NULL OR pxct.da_xoa = 0)) AS tong_so_luong_xuat,
+             COALESCE(px.tong_tien, (SELECT COALESCE(SUM(COALESCE(pxct.thanh_tien, (COALESCE(pxct.so_luong_xuat, pxct.so_luong, 0) * COALESCE(pxct.don_gia, 0)))), 0) FROM phieu_xuat_kho_chi_tiet pxct WHERE pxct.id_phieu_xuat_kho = px.id AND (pxct.da_xoa IS NULL OR pxct.da_xoa = 0)), 0) AS tong_tien_xuat
       FROM phieu_xuat_kho px
       LEFT JOIN cong_trinh c ON px.id_cong_trinh = c.id
       LEFT JOIN kho_hang k_nguon ON px.id_kho_hang = k_nguon.id
@@ -676,11 +682,25 @@ router.post('/phieu-xuat', async (req, res) => {
     }
 
     // Get Site Temp Warehouse for this project
-    const [khoTamRows] = await conn.query('SELECT id FROM kho_hang WHERE id_cong_trinh = ? AND la_kho_tam_cong_trinh = 1', [reqData.id_cong_trinh]);
+    let [khoTamRows] = await conn.query('SELECT id FROM kho_hang WHERE id_cong_trinh = ? AND la_kho_tam_cong_trinh = 1 AND da_xoa = 0', [reqData.id_cong_trinh]);
     if (khoTamRows.length === 0) {
-      await conn.rollback();
-      conn.release();
-      return res.status(400).json({ message: 'Chưa khởi tạo Kho tạm công trình cho dự án này.' });
+      // Fallback 1: Kho gán id_cong_trinh nhưng la_kho_tam_cong_trinh = 0
+      const [anySiteWh] = await conn.query('SELECT id FROM kho_hang WHERE id_cong_trinh = ? AND da_xoa = 0 LIMIT 1', [reqData.id_cong_trinh]);
+      if (anySiteWh.length > 0) {
+        khoTamRows = anySiteWh;
+        await conn.query('UPDATE kho_hang SET la_kho_tam_cong_trinh = 1 WHERE id = ?', [anySiteWh[0].id]);
+      } else {
+        // Fallback 2: Tự động khởi tạo kho tạm cho công trình nếu chưa có
+        const [projRows] = await conn.query('SELECT ten_cong_trinh, dia_diem FROM cong_trinh WHERE id = ?', [reqData.id_cong_trinh]);
+        const projName = projRows[0]?.ten_cong_trinh || `Công trình #${reqData.id_cong_trinh}`;
+        const projLoc = projRows[0]?.dia_diem || 'Tại công trình';
+        const [insResult] = await conn.query(`
+          INSERT INTO kho_hang (
+            ten_kho, loai_kho, id_cong_trinh, la_kho_tam_cong_trinh, dia_diem, ghi_chu, nguoi_tao, thoi_gian_tao, da_xoa
+          ) VALUES (?, 'Kho tạm công trình', ?, 1, ?, 'Kho tạm công trình khởi tạo tự động khi xuất hàng', ?, NOW(), 0)
+        `, [`Kho tạm - ${projName}`, reqData.id_cong_trinh, projLoc, req.user?.ten_dang_nhap || 'system']);
+        khoTamRows = [{ id: insResult.insertId }];
+      }
     }
     const idKhoTamNhan = khoTamRows[0].id;
 

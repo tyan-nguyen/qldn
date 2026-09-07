@@ -12,9 +12,11 @@ const upload = multer({ storage: multer.memoryStorage() });
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const [rows] = await pool.query(
-      `SELECT c.*, k.ten_khach_hang 
+      `SELECT c.*, c.id_linh_vuc_kinh_doanh AS id_lvkd, k.ten_khach_hang,
+              l.ten_lvkd, l.ten_cong_ty, l.ma_lvkd, l.dia_chi AS dia_chi_lvkd, l.dien_thoai AS dien_thoai_lvkd, l.logo_url AS logo_url_lvkd, l.ma_so_thue AS ma_so_thue_lvkd
        FROM cong_trinh c
        LEFT JOIN khach_hang k ON c.id_khach_hang = k.id
+       LEFT JOIN linh_vuc_kinh_doanh l ON c.id_linh_vuc_kinh_doanh = l.id
        ORDER BY c.id DESC`
     );
     return res.json(rows);
@@ -24,25 +26,67 @@ router.get('/', authMiddleware, async (req, res) => {
   }
 });
 
+// 1.1 Single Project Details
+router.get('/:id', authMiddleware, async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT c.*, c.id_linh_vuc_kinh_doanh AS id_lvkd, k.ten_khach_hang,
+              l.ten_lvkd, l.ten_cong_ty, l.ma_lvkd, l.dia_chi AS dia_chi_lvkd, l.dien_thoai AS dien_thoai_lvkd, l.logo_url AS logo_url_lvkd, l.ma_so_thue AS ma_so_thue_lvkd
+       FROM cong_trinh c
+       LEFT JOIN khach_hang k ON c.id_khach_hang = k.id
+       LEFT JOIN linh_vuc_kinh_doanh l ON c.id_linh_vuc_kinh_doanh = l.id
+       WHERE c.id = ?`,
+      [req.params.id]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({ message: 'Không tìm thấy công trình.' });
+    }
+    return res.json(rows[0]);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Lỗi truy vấn thông tin công trình.' });
+  }
+});
+
 // 2. Create Project (Ke_Hoach, Ban_Giam_Doc)
 router.post('/', authMiddleware, authorize(['Ke_Hoach', 'Ban_Giam_Doc']), async (req, res) => {
-  const { ten_cong_trinh, ten_viet_tat, dia_chi, id_khach_hang, tong_ngan_sach, ngay_bat_dau, ngay_ket_thuc } = req.body;
+  const { ten_cong_trinh, ten_viet_tat, dia_chi, id_khach_hang, id_linh_vuc_kinh_doanh, id_lvkd, tong_ngan_sach, ngay_bat_dau, ngay_ket_thuc } = req.body;
   if (!ten_cong_trinh) {
     return res.status(400).json({ message: 'Tên công trình là bắt buộc.' });
   }
+
+  const lvkdId = id_linh_vuc_kinh_doanh || id_lvkd || null;
 
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
 
     const [result] = await connection.query(
-      `INSERT INTO cong_trinh (ten_cong_trinh, ten_viet_tat, dia_chi, id_khach_hang, tong_ngan_sach, ngay_bat_dau, ngay_ket_thuc, trang_thai, nguoi_tao)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'Dang_Thi_Cong', ?)`,
-      [ten_cong_trinh.trim(), ten_viet_tat ? ten_viet_tat.trim() : null, dia_chi || null, id_khach_hang || null, tong_ngan_sach || 0, ngay_bat_dau || null, ngay_ket_thuc || null, req.user.ten_dang_nhap]
+      `INSERT INTO cong_trinh (ten_cong_trinh, ten_viet_tat, dia_chi, id_khach_hang, id_linh_vuc_kinh_doanh, tong_ngan_sach, ngay_bat_dau, ngay_ket_thuc, trang_thai, nguoi_tao)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Dang_Thi_Cong', ?)`,
+      [
+        ten_cong_trinh.trim(),
+        ten_viet_tat ? ten_viet_tat.trim() : null,
+        dia_chi || null,
+        id_khach_hang || null,
+        lvkdId ? parseInt(lvkdId) : null,
+        tong_ngan_sach || 0,
+        ngay_bat_dau || null,
+        ngay_ket_thuc || null,
+        req.user.ten_dang_nhap
+      ]
     );
 
     const insertedId = result.insertId;
-    const [newRow] = await connection.query('SELECT * FROM cong_trinh WHERE id = ?', [insertedId]);
+    const [newRow] = await connection.query(
+      `SELECT c.*, c.id_linh_vuc_kinh_doanh AS id_lvkd, k.ten_khach_hang,
+              l.ten_lvkd, l.ten_cong_ty, l.ma_lvkd, l.dia_chi AS dia_chi_lvkd, l.dien_thoai AS dien_thoai_lvkd, l.logo_url AS logo_url_lvkd, l.ma_so_thue AS ma_so_thue_lvkd
+       FROM cong_trinh c
+       LEFT JOIN khach_hang k ON c.id_khach_hang = k.id
+       LEFT JOIN linh_vuc_kinh_doanh l ON c.id_linh_vuc_kinh_doanh = l.id
+       WHERE c.id = ?`,
+      [insertedId]
+    );
 
     await logChange(connection, 'cong_trinh', insertedId, 'THEM_MOI', null, newRow[0], req.user.ten_dang_nhap);
     await connection.commit();
@@ -58,7 +102,7 @@ router.post('/', authMiddleware, authorize(['Ke_Hoach', 'Ban_Giam_Doc']), async 
 
 // Update Project (Ke_Hoach, Ban_Giam_Doc, Admin)
 router.put('/:id', authMiddleware, authorize(['Ke_Hoach', 'Ban_Giam_Doc', 'Admin']), async (req, res) => {
-  const { ten_cong_trinh, ten_viet_tat, dia_chi, id_khach_hang, tong_ngan_sach, ngay_bat_dau, ngay_ket_thuc, trang_thai } = req.body;
+  const { ten_cong_trinh, ten_viet_tat, dia_chi, id_khach_hang, id_linh_vuc_kinh_doanh, id_lvkd, tong_ngan_sach, ngay_bat_dau, ngay_ket_thuc, trang_thai } = req.body;
   if (!ten_cong_trinh || !ten_cong_trinh.trim()) {
     return res.status(400).json({ message: 'Tên công trình là bắt buộc.' });
   }
@@ -73,15 +117,20 @@ router.put('/:id', authMiddleware, authorize(['Ke_Hoach', 'Ban_Giam_Doc', 'Admin
       return res.status(404).json({ message: 'Không tìm thấy công trình.' });
     }
 
+    const lvkdId = (id_linh_vuc_kinh_doanh !== undefined || id_lvkd !== undefined)
+      ? (id_linh_vuc_kinh_doanh || id_lvkd ? parseInt(id_linh_vuc_kinh_doanh || id_lvkd) : null)
+      : oldRow[0].id_linh_vuc_kinh_doanh;
+
     await connection.query(
       `UPDATE cong_trinh 
-       SET ten_cong_trinh = ?, ten_viet_tat = ?, dia_chi = ?, id_khach_hang = ?, tong_ngan_sach = ?, ngay_bat_dau = ?, ngay_ket_thuc = ?, trang_thai = ?
+       SET ten_cong_trinh = ?, ten_viet_tat = ?, dia_chi = ?, id_khach_hang = ?, id_linh_vuc_kinh_doanh = ?, tong_ngan_sach = ?, ngay_bat_dau = ?, ngay_ket_thuc = ?, trang_thai = ?
        WHERE id = ?`,
       [
         ten_cong_trinh.trim(),
         ten_viet_tat ? ten_viet_tat.trim() : null,
         dia_chi || null,
         id_khach_hang || null,
+        lvkdId,
         tong_ngan_sach || 0,
         ngay_bat_dau || null,
         ngay_ket_thuc || null,
@@ -90,7 +139,15 @@ router.put('/:id', authMiddleware, authorize(['Ke_Hoach', 'Ban_Giam_Doc', 'Admin
       ]
     );
 
-    const [newRow] = await connection.query('SELECT * FROM cong_trinh WHERE id = ?', [req.params.id]);
+    const [newRow] = await connection.query(
+      `SELECT c.*, c.id_linh_vuc_kinh_doanh AS id_lvkd, k.ten_khach_hang,
+              l.ten_lvkd, l.ten_cong_ty, l.ma_lvkd, l.dia_chi AS dia_chi_lvkd, l.dien_thoai AS dien_thoai_lvkd, l.logo_url AS logo_url_lvkd, l.ma_so_thue AS ma_so_thue_lvkd
+       FROM cong_trinh c
+       LEFT JOIN khach_hang k ON c.id_khach_hang = k.id
+       LEFT JOIN linh_vuc_kinh_doanh l ON c.id_linh_vuc_kinh_doanh = l.id
+       WHERE c.id = ?`,
+      [req.params.id]
+    );
     await logChange(connection, 'cong_trinh', req.params.id, 'CAP_NHAT', oldRow[0], newRow[0], req.user.ten_dang_nhap);
 
     await connection.commit();
@@ -1832,8 +1889,11 @@ router.get('/:id/bao-cao-tong-hop-vat-tu-chi-phi', authMiddleware, async (req, r
       project: {
         id: project.id,
         ten_cong_trinh: project.ten_cong_trinh,
-        dia_chi: project.dia_chi,
-        ten_khach_hang: project.ten_khach_hang
+        dia_chi: project.dia_chi || '',
+        ten_khach_hang: project.ten_khach_hang || '',
+        ngay_bat_dau: project.ngay_bat_dau || null,
+        ngay_ket_thuc: project.ngay_ket_thuc || null,
+        tong_ngan_sach: project.tong_ngan_sach || 0
       },
       items,
       tong_cong
