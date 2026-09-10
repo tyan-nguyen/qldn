@@ -4,6 +4,9 @@ const { pool: db } = require('../config/db');
 const { authMiddleware, authorize } = require('../middleware/auth');
 const { generateSequenceNumber } = require('../services/sequenceService');
 
+// Protect all Purchase Order routes
+router.use(authMiddleware);
+
 // GET /api/phieu-mua-hang/years: List distinct recording years
 router.get('/years', async (req, res) => {
   try {
@@ -133,7 +136,7 @@ router.get('/:id', async (req, res) => {
 });
 
 // POST /api/phieu-mua-hang: Create Purchase Order
-router.post('/', async (req, res) => {
+router.post('/', authorize(['Admin', 'Ban_Giam_Doc', 'Ke_Toan', 'Vat_Tu']), async (req, res) => {
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
@@ -279,7 +282,7 @@ router.post('/', async (req, res) => {
 });
 
 // PATCH /api/phieu-mua-hang/:id/xac-nhan-nhan-hang: Confirm Goods Receipt with Actual Received Qty
-router.patch('/:id/xac-nhan-nhan-hang', async (req, res) => {
+router.patch('/:id/xac-nhan-nhan-hang', authorize(['Admin', 'Ban_Giam_Doc', 'Ke_Toan', 'Vat_Tu', 'Thu_Kho', 'Chi_Huy_Truong']), async (req, res) => {
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();

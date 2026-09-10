@@ -1,7 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const { pool: db } = require('../config/db');
+const { authMiddleware, authorize } = require('../middleware/auth');
 const { generateSequenceNumber } = require('../services/sequenceService');
+
+// Protect all Site Transfer routes with authentication
+router.use(authMiddleware);
 
 // GET /api/dieu-chuyen-vat-tu: List Transfers
 router.get('/', async (req, res) => {
@@ -113,7 +117,7 @@ router.get('/:id', async (req, res) => {
 });
 
 // POST /api/dieu-chuyen-vat-tu: Create Transfer Order
-router.post('/', async (req, res) => {
+router.post('/', authorize(['Admin', 'Ban_Giam_Doc', 'Thu_Kho', 'Chi_Huy_Truong', 'Vat_Tu']), async (req, res) => {
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
@@ -204,7 +208,7 @@ router.post('/', async (req, res) => {
 });
 
 // PATCH /api/dieu-chuyen-vat-tu/:id/xac-nhan-nhan-hang: Confirm Goods Receipt for Transfer
-router.patch('/:id/xac-nhan-nhan-hang', async (req, res) => {
+router.patch('/:id/xac-nhan-nhan-hang', authorize(['Admin', 'Ban_Giam_Doc', 'Thu_Kho', 'Chi_Huy_Truong', 'Vat_Tu']), async (req, res) => {
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();

@@ -60,6 +60,17 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
+// Global API Rate Limiter to prevent DoS, scraping, and brute force
+const rateLimit = require('express-rate-limit');
+const apiLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: 600, // max 600 requests/min per IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: 'Hệ thống phát hiện quá nhiều yêu cầu từ địa chỉ IP của bạn. Vui lòng chậm lại.' }
+});
+app.use('/api', apiLimiter);
+
 const fs = require('fs');
 
 const staticOptions = {

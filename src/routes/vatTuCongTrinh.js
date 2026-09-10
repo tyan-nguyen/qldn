@@ -6,21 +6,39 @@ const fs = require('fs');
 const { generateSequenceNumber } = require('../services/sequenceService');
 const { parseMaterialRequestFile } = require('../services/aiOcrService');
 const { logChange } = require('../utils/logger');
+const { authMiddleware, authorize } = require('../middleware/auth');
 
-// Multer storage for AI OCR uploads and request attachments
+// Protect all Site Materials routes with authentication
+router.use(authMiddleware);
+
+// Multer storage for AI OCR uploads and request attachments with security whitelist
 const uploadDir = path.join(__dirname, '../../uploads');
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
 
+const ALLOWED_UPLOAD_EXTS = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.png', '.jpg', '.jpeg', '.webp', '.dwg', '.txt'];
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadDir),
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, 'site-mat-' + uniqueSuffix + path.extname(file.originalname));
+    const safeExt = path.extname(file.originalname).toLowerCase();
+    cb(null, 'site-mat-' + uniqueSuffix + safeExt);
   }
 });
-const upload = multer({ storage });
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (!ALLOWED_UPLOAD_EXTS.includes(ext)) {
+      return cb(new Error('Định dạng tệp không được phép. Chỉ chấp nhận tài liệu (.pdf, .doc, .docx, .xls, .xlsx, .dwg) và hình ảnh (.png, .jpg, .jpeg, .webp).'));
+    }
+    cb(null, true);
+  }
+});
 
 const { pool } = require('../config/db');
 // Helper DB pool accessor
@@ -381,7 +399,7 @@ router.put('/yeu-cau/:id/gui', async (req, res) => {
 });
 
 // PUT Approve / Reject Online Request (Chờ duyệt -> Đã duyệt / Từ chối)
-router.put('/yeu-cau/:id/duyet', async (req, res) => {
+router.put('/yeu-cau/:id/duyet', authorize(['Admin', 'Ban_Giam_Doc', 'Chi_Huy_Truong', 'Vat_Tu']), async (req, res) => {
   const db = getDb(req);
   const conn = await db.getConnection();
   try {
@@ -478,7 +496,7 @@ router.put('/yeu-cau/:id/duyet', async (req, res) => {
 });
 
 // DELETE Draft Request
-router.delete('/yeu-cau/:id', async (req, res) => {
+router.delete('/yeu-cau/:id', authorize(['Admin', 'Ban_Giam_Doc', 'Chi_Huy_Truong', 'Vat_Tu']), async (req, res) => {
   try {
     const db = getDb(req);
     const [rows] = await db.query('SELECT trang_thai FROM yeu_cau_vat_tu WHERE id = ?', [req.params.id]);
@@ -638,7 +656,7 @@ router.get('/phieu-xuat', async (req, res) => {
 });
 
 // POST Create Site Export Voucher from Approved Request
-router.post('/phieu-xuat', async (req, res) => {
+router.post('/phieu-xuat', authorize(['Admin', 'Ban_Giam_Doc', 'Thu_Kho', 'Ke_Toan', 'Vat_Tu']), async (req, res) => {
   const db = getDb(req);
   const conn = await db.getConnection();
   try {
@@ -961,7 +979,7 @@ router.put('/phieu-xuat/:id', async (req, res) => {
 });
 
 // PUT Confirm Export (Xác nhận xuất hàng -> Giảm Kho nguồn, Tăng Kho tạm)
-router.put('/phieu-xuat/:id/xac-nhan', async (req, res) => {
+router.put('/phieu-xuat/:id/xac-nhan', authorize(['Admin', 'Ban_Giam_Doc', 'Thu_Kho', 'Ke_Toan', 'Vat_Tu']), async (req, res) => {
   const db = getDb(req);
   const conn = await db.getConnection();
   try {
@@ -1387,6 +1405,9 @@ router.get('/tong-hop-xuat', async (req, res) => {
       unionQueries.push(`
         SELECT 
           pxct.id_danh_muc_vat_tu,
+          '' AS ma_vat_tu,
+          '' AS ten_vat_tu,
+          COALESCE(pxct.don_vi_tinh, '') AS don_vi_tinh,
           COALESCE(pxct.so_luong_xuat, pxct.so_luong, 0) AS so_luong,
           COALESCE(pxct.don_gia, 0) AS don_gia,
           COALESCE(pxct.thanh_tien, (COALESCE(pxct.so_luong_xuat, pxct.so_luong, 0) * COALESCE(pxct.don_gia, 0))) AS thanh_tien
@@ -1403,6 +1424,9 @@ router.get('/tong-hop-xuat', async (req, res) => {
       unionQueries.push(`
         SELECT 
           pmct.id_danh_muc_vat_tu,
+          '' AS ma_vat_tu,
+          '' AS ten_vat_tu,
+          COALESCE(pmct.don_vi_tinh, '') AS don_vi_tinh,
           COALESCE(pmct.so_luong_nhan_thuc_te, pmct.so_luong_mua, 0) AS so_luong,
           COALESCE(pmct.don_gia, 0) AS don_gia,
           COALESCE(pmct.thanh_tien, (COALESCE(pmct.so_luong_nhan_thuc_te, pmct.so_luong_mua, 0) * COALESCE(pmct.don_gia, 0))) AS thanh_tien
@@ -1418,6 +1442,23 @@ router.get('/tong-hop-xuat', async (req, res) => {
       unionParams.push(id_cong_trinh);
     }
 
+    // Source 3: Vật tư nhập trực tiếp công trình (Không qua kho)
+    if (!nguon_cap || nguon_cap === 'ALL' || nguon_cap === 'TRUC_TIEP') {
+      unionQueries.push(`
+        SELECT 
+          tt.id_danh_muc_vat_tu,
+          COALESCE(tt.ma_vat_tu, '') AS ma_vat_tu,
+          COALESCE(tt.ten_vat_tu, '') AS ten_vat_tu,
+          COALESCE(tt.don_vi_tinh, '') AS don_vi_tinh,
+          COALESCE(tt.so_luong, 0) AS so_luong,
+          COALESCE(tt.don_gia, 0) AS don_gia,
+          COALESCE(tt.thanh_tien, (tt.so_luong * tt.don_gia), 0) AS thanh_tien
+        FROM cong_trinh_vat_tu_truc_tiep tt
+        WHERE tt.id_cong_trinh = ?
+      `);
+      unionParams.push(id_cong_trinh);
+    }
+
     if (unionQueries.length === 0) {
       return res.json([]);
     }
@@ -1426,33 +1467,33 @@ router.get('/tong-hop-xuat', async (req, res) => {
 
     let mainQuery = `
       SELECT 
-        v.id AS id_danh_muc_vat_tu,
-        v.ma_vat_tu,
-        v.ten_vat_tu,
-        v.don_vi_tinh,
-        lvt.ten_loai_vat_tu AS loai_vat_tu,
+        COALESCE(v.id, c.id_danh_muc_vat_tu, 0) AS id_danh_muc_vat_tu,
+        COALESCE(v.ma_vat_tu, c.ma_vat_tu, '') AS ma_vat_tu,
+        COALESCE(v.ten_vat_tu, c.ten_vat_tu, 'Vật tư thi công') AS ten_vat_tu,
+        COALESCE(v.don_vi_tinh, c.don_vi_tinh, '') AS don_vi_tinh,
+        COALESCE(lvt.ten_loai_vat_tu, 'Nhập trực tiếp') AS loai_vat_tu,
         COALESCE(SUM(c.so_luong), 0) AS tong_so_luong_xuat,
         COALESCE(SUM(c.thanh_tien) / NULLIF(SUM(c.so_luong), 0), COALESCE(AVG(NULLIF(c.don_gia, 0)), 0)) AS don_gia_trung_binh,
         COALESCE(SUM(c.thanh_tien), 0) AS tong_thanh_tien
       FROM (${unionSql}) c
-      JOIN danh_muc_vat_tu v ON c.id_danh_muc_vat_tu = v.id
+      LEFT JOIN danh_muc_vat_tu v ON c.id_danh_muc_vat_tu = v.id
       LEFT JOIN danh_muc_loai_vat_tu lvt ON v.id_loai_vat_tu = lvt.id
       WHERE 1=1
     `;
     const params = [...unionParams];
 
     if (loai_vat_tu && loai_vat_tu.trim() !== '') {
-      mainQuery += ` AND (lvt.ten_loai_vat_tu LIKE ?)`;
+      mainQuery += ` AND (COALESCE(lvt.ten_loai_vat_tu, 'Nhập trực tiếp') LIKE ?)`;
       params.push(`%${loai_vat_tu.trim()}%`);
     }
 
     if (search && search.trim() !== '') {
-      mainQuery += ` AND (v.ma_vat_tu LIKE ? OR v.ten_vat_tu LIKE ? OR lvt.ten_loai_vat_tu LIKE ?)`;
+      mainQuery += ` AND (COALESCE(v.ma_vat_tu, c.ma_vat_tu, '') LIKE ? OR COALESCE(v.ten_vat_tu, c.ten_vat_tu, '') LIKE ? OR COALESCE(lvt.ten_loai_vat_tu, 'Nhập trực tiếp') LIKE ?)`;
       const term = `%${search.trim()}%`;
       params.push(term, term, term);
     }
 
-    mainQuery += ` GROUP BY v.id, v.ma_vat_tu, v.ten_vat_tu, v.don_vi_tinh, lvt.ten_loai_vat_tu ORDER BY v.ten_vat_tu ASC`;
+    mainQuery += ` GROUP BY COALESCE(v.id, c.id_danh_muc_vat_tu, c.ten_vat_tu), COALESCE(v.ma_vat_tu, c.ma_vat_tu, ''), COALESCE(v.ten_vat_tu, c.ten_vat_tu, 'Vật tư thi công'), COALESCE(v.don_vi_tinh, c.don_vi_tinh, ''), COALESCE(lvt.ten_loai_vat_tu, 'Nhập trực tiếp') ORDER BY COALESCE(v.ten_vat_tu, c.ten_vat_tu) ASC`;
 
     const [rows] = await db.query(mainQuery, params);
     res.json(rows);
@@ -1525,6 +1566,28 @@ router.get('/bao-cao-theo-ncc', async (req, res) => {
     `);
     unionParams.push(id_cong_trinh);
 
+    // 3. Từ Vật tư nhập trực tiếp công trình (không qua kho)
+    unionQueries.push(`
+      SELECT 
+        tt.id AS id_phieu,
+        COALESCE(tt.so_chung_tu, '') AS ma_phieu,
+        DATE(tt.ngay_ghi_nhan) AS ngay_giao,
+        COALESCE(tt.nha_cung_cap, 'Cung cấp trực tiếp') AS nha_cung_cap,
+        'Nhập trực tiếp (Không qua kho)' AS loai_nguon,
+        tt.id_danh_muc_vat_tu,
+        COALESCE(v.ma_vat_tu, tt.ma_vat_tu, '') AS ma_vat_tu,
+        COALESCE(v.ten_vat_tu, tt.ten_vat_tu) AS ten_vat_tu,
+        COALESCE(v.don_vi_tinh, tt.don_vi_tinh) AS don_vi_tinh,
+        COALESCE(tt.so_luong, 0) AS so_luong,
+        COALESCE(tt.don_gia, 0) AS don_gia,
+        COALESCE(tt.thanh_tien, (tt.so_luong * tt.don_gia), 0) AS thanh_tien,
+        tt.ghi_chu
+      FROM cong_trinh_vat_tu_truc_tiep tt
+      LEFT JOIN danh_muc_vat_tu v ON tt.id_danh_muc_vat_tu = v.id
+      WHERE tt.id_cong_trinh = ?
+    `);
+    unionParams.push(id_cong_trinh);
+
     const unionSql = unionQueries.join(' UNION ALL ');
 
     let mainQuery = `
@@ -1586,7 +1649,7 @@ router.delete('/yeu-cau/:id', async (req, res) => {
 });
 
 // DELETE /api/vat-tu-cong-trinh/phieu-xuat/:id
-router.delete('/phieu-xuat/:id', async (req, res) => {
+router.delete('/phieu-xuat/:id', authorize(['Admin', 'Ban_Giam_Doc', 'Thu_Kho', 'Ke_Toan']), async (req, res) => {
   const db = getDb(req);
   const conn = await db.getConnection();
   try {
@@ -1614,7 +1677,7 @@ router.delete('/phieu-xuat/:id', async (req, res) => {
 });
 
 // PUT /api/vat-tu-cong-trinh/phieu-xuat/:id/huy - Hủy phiếu xuất kho & Hoàn tồn kho (Revert Stock)
-router.put('/phieu-xuat/:id/huy', async (req, res) => {
+router.put('/phieu-xuat/:id/huy', authorize(['Admin', 'Ban_Giam_Doc', 'Thu_Kho', 'Ke_Toan']), async (req, res) => {
   const db = getDb(req);
   const conn = await db.getConnection();
   try {
@@ -1763,6 +1826,304 @@ router.put('/phieu-xuat/:id/huy', async (req, res) => {
     conn.release();
     console.error('Lỗi khi hủy phiếu xuất kho:', err);
     res.status(500).json({ message: 'Lỗi khi hủy phiếu xuất kho: ' + err.message });
+  }
+});
+
+// =========================================================================
+// 12. VẬT TƯ NHẬP TRỰC TIẾP CHO CÔNG TRÌNH (KHÔNG QUA KHO & KHÔNG QUA PO)
+// =========================================================================
+
+// GET Catalog of materials for selection in direct materials form
+router.get('/danh-muc-vat-tu', async (req, res) => {
+  try {
+    const db = getDb(req);
+    const [rows] = await db.query(`
+      SELECT 
+        v.id,
+        v.ma_vat_tu,
+        v.ten_vat_tu,
+        v.don_vi_tinh,
+        COALESCE(v.don_gia_tieu_chuan, 0) AS don_gia_tieu_chuan,
+        COALESCE(v.don_gia_tieu_chuan, 0) AS don_gia_nhap,
+        lvt.ten_loai_vat_tu
+      FROM danh_muc_vat_tu v
+      LEFT JOIN danh_muc_loai_vat_tu lvt ON v.id_loai_vat_tu = lvt.id
+      WHERE v.da_xoa = 0 OR v.da_xoa IS NULL
+      ORDER BY v.ten_vat_tu ASC
+    `);
+    res.json(rows);
+  } catch (err) {
+    console.error('Error loading material catalog:', err);
+    res.status(500).json({ message: 'Lỗi tải danh mục vật tư: ' + err.message });
+  }
+});
+
+// GET List of direct materials for a project
+router.get('/truc-tiep', async (req, res) => {
+  try {
+    const db = getDb(req);
+    const { id_cong_trinh, search, tu_ngay, den_ngay } = req.query;
+    if (!id_cong_trinh) {
+      return res.json([]);
+    }
+
+    let query = `
+      SELECT 
+        tt.*,
+        v.ma_vat_tu AS ma_vat_tu_dm,
+        v.ten_vat_tu AS ten_vat_tu_dm,
+        v.don_vi_tinh AS don_vi_tinh_dm,
+        lvt.ten_loai_vat_tu
+      FROM cong_trinh_vat_tu_truc_tiep tt
+      LEFT JOIN danh_muc_vat_tu v ON tt.id_danh_muc_vat_tu = v.id
+      LEFT JOIN danh_muc_loai_vat_tu lvt ON v.id_loai_vat_tu = lvt.id
+      WHERE tt.id_cong_trinh = ?
+    `;
+    const params = [id_cong_trinh];
+
+    if (tu_ngay) {
+      query += ` AND tt.ngay_ghi_nhan >= ?`;
+      params.push(tu_ngay);
+    }
+    if (den_ngay) {
+      query += ` AND tt.ngay_ghi_nhan <= ?`;
+      params.push(den_ngay);
+    }
+    if (search && search.trim() !== '') {
+      const term = `%${search.trim()}%`;
+      query += ` AND (tt.ten_vat_tu LIKE ? OR tt.ma_vat_tu LIKE ? OR tt.nha_cung_cap LIKE ? OR tt.so_chung_tu LIKE ? OR tt.ghi_chu LIKE ?)`;
+      params.push(term, term, term, term, term);
+    }
+
+    query += ` ORDER BY tt.ngay_ghi_nhan DESC, tt.id DESC`;
+
+    const [rows] = await db.query(query, params);
+    res.json(rows);
+  } catch (err) {
+    console.error('Error fetching direct materials:', err);
+    res.status(500).json({ message: 'Lỗi tải danh sách vật tư nhập trực tiếp: ' + err.message });
+  }
+});
+
+// POST Add direct material
+router.post('/truc-tiep', authMiddleware, async (req, res) => {
+  try {
+    const db = getDb(req);
+    const {
+      id_cong_trinh,
+      id_danh_muc_vat_tu,
+      ma_vat_tu,
+      ten_vat_tu,
+      don_vi_tinh,
+      so_luong,
+      don_gia,
+      thanh_tien,
+      ngay_ghi_nhan,
+      nha_cung_cap,
+      so_chung_tu,
+      ghi_chu,
+      nguoi_tao
+    } = req.body;
+
+    if (!id_cong_trinh) {
+      return res.status(400).json({ message: 'Thiếu mã công trình.' });
+    }
+    if (!ten_vat_tu || !ten_vat_tu.trim()) {
+      return res.status(400).json({ message: 'Vui lòng nhập tên vật tư.' });
+    }
+    if (!don_vi_tinh || !don_vi_tinh.trim()) {
+      return res.status(400).json({ message: 'Vui lòng nhập đơn vị tính.' });
+    }
+    const parsedQty = parseFloat(so_luong) || 0;
+    if (parsedQty <= 0) {
+      return res.status(400).json({ message: 'Số lượng phải lớn hơn 0.' });
+    }
+    if (!ngay_ghi_nhan) {
+      return res.status(400).json({ message: 'Vui lòng chọn ngày ghi nhận.' });
+    }
+
+    const parsedDonGia = parseFloat(don_gia) || 0;
+    const parsedThanhTien = parseFloat(thanh_tien) !== undefined && !isNaN(parseFloat(thanh_tien))
+      ? parseFloat(thanh_tien)
+      : (parsedQty * parsedDonGia);
+    const currentUser = req.user?.ten_dang_nhap || req.user?.ho_ten || nguoi_tao || 'Hệ thống';
+
+    const [result] = await db.query(
+      `INSERT INTO cong_trinh_vat_tu_truc_tiep (
+        id_cong_trinh, id_danh_muc_vat_tu, ma_vat_tu, ten_vat_tu, don_vi_tinh,
+        so_luong, don_gia, thanh_tien, ngay_ghi_nhan, nha_cung_cap, so_chung_tu,
+        ghi_chu, nguoi_tao
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id_cong_trinh,
+        id_danh_muc_vat_tu || null,
+        ma_vat_tu || null,
+        ten_vat_tu.trim(),
+        don_vi_tinh.trim(),
+        parsedQty,
+        parsedDonGia,
+        parsedThanhTien,
+        ngay_ghi_nhan,
+        nha_cung_cap ? nha_cung_cap.trim() : null,
+        so_chung_tu ? so_chung_tu.trim() : null,
+        ghi_chu ? ghi_chu.trim() : null,
+        currentUser
+      ]
+    );
+
+    try {
+      await logChange(
+        db,
+        'cong_trinh_vat_tu_truc_tiep',
+        result.insertId,
+        'THEM_MOI',
+        null,
+        { id: result.insertId, id_cong_trinh, ten_vat_tu, so_luong: parsedQty, thanh_tien: parsedThanhTien },
+        currentUser
+      );
+    } catch (logErr) {
+      console.warn('Could not log direct material insert:', logErr.message);
+    }
+
+    res.json({
+      id: result.insertId,
+      message: 'Thêm vật tư nhập trực tiếp thành công!'
+    });
+  } catch (err) {
+    console.error('Error adding direct material:', err);
+    res.status(500).json({ message: 'Lỗi thêm vật tư nhập trực tiếp: ' + err.message });
+  }
+});
+
+// PUT Update direct material
+router.put('/truc-tiep/:id', authMiddleware, async (req, res) => {
+  try {
+    const db = getDb(req);
+    const { id } = req.params;
+    const {
+      id_danh_muc_vat_tu,
+      ma_vat_tu,
+      ten_vat_tu,
+      don_vi_tinh,
+      so_luong,
+      don_gia,
+      thanh_tien,
+      ngay_ghi_nhan,
+      nha_cung_cap,
+      so_chung_tu,
+      ghi_chu,
+      nguoi_tao
+    } = req.body;
+
+    const [existing] = await db.query('SELECT * FROM cong_trinh_vat_tu_truc_tiep WHERE id = ?', [id]);
+    if (existing.length === 0) {
+      return res.status(404).json({ message: 'Không tìm thấy bản ghi vật tư.' });
+    }
+    const oldData = existing[0];
+
+    if (!ten_vat_tu || !ten_vat_tu.trim()) {
+      return res.status(400).json({ message: 'Vui lòng nhập tên vật tư.' });
+    }
+    if (!don_vi_tinh || !don_vi_tinh.trim()) {
+      return res.status(400).json({ message: 'Vui lòng nhập đơn vị tính.' });
+    }
+    const parsedQty = parseFloat(so_luong) || 0;
+    if (parsedQty <= 0) {
+      return res.status(400).json({ message: 'Số lượng phải lớn hơn 0.' });
+    }
+    if (!ngay_ghi_nhan) {
+      return res.status(400).json({ message: 'Vui lòng chọn ngày ghi nhận.' });
+    }
+
+    const parsedDonGia = parseFloat(don_gia) || 0;
+    const parsedThanhTien = parseFloat(thanh_tien) !== undefined && !isNaN(parseFloat(thanh_tien))
+      ? parseFloat(thanh_tien)
+      : (parsedQty * parsedDonGia);
+    const currentUser = req.user?.ten_dang_nhap || req.user?.ho_ten || nguoi_tao || oldData.nguoi_tao || 'Hệ thống';
+
+    await db.query(
+      `UPDATE cong_trinh_vat_tu_truc_tiep SET
+        id_danh_muc_vat_tu = ?,
+        ma_vat_tu = ?,
+        ten_vat_tu = ?,
+        don_vi_tinh = ?,
+        so_luong = ?,
+        don_gia = ?,
+        thanh_tien = ?,
+        ngay_ghi_nhan = ?,
+        nha_cung_cap = ?,
+        so_chung_tu = ?,
+        ghi_chu = ?
+      WHERE id = ?`,
+      [
+        id_danh_muc_vat_tu || null,
+        ma_vat_tu || null,
+        ten_vat_tu.trim(),
+        don_vi_tinh.trim(),
+        parsedQty,
+        parsedDonGia,
+        parsedThanhTien,
+        ngay_ghi_nhan,
+        nha_cung_cap ? nha_cung_cap.trim() : null,
+        so_chung_tu ? so_chung_tu.trim() : null,
+        ghi_chu ? ghi_chu.trim() : null,
+        id
+      ]
+    );
+
+    try {
+      await logChange(
+        db,
+        'cong_trinh_vat_tu_truc_tiep',
+        id,
+        'CAP_NHAT',
+        oldData,
+        { id, ten_vat_tu, so_luong: parsedQty, thanh_tien: parsedThanhTien },
+        currentUser
+      );
+    } catch (logErr) {
+      console.warn('Could not log direct material update:', logErr.message);
+    }
+
+    res.json({ message: 'Cập nhật vật tư trực tiếp thành công!' });
+  } catch (err) {
+    console.error('Error updating direct material:', err);
+    res.status(500).json({ message: 'Lỗi cập nhật vật tư trực tiếp: ' + err.message });
+  }
+});
+
+// DELETE direct material
+router.delete('/truc-tiep/:id', authMiddleware, async (req, res) => {
+  try {
+    const db = getDb(req);
+    const { id } = req.params;
+    const [existing] = await db.query('SELECT * FROM cong_trinh_vat_tu_truc_tiep WHERE id = ?', [id]);
+    if (existing.length === 0) {
+      return res.status(404).json({ message: 'Không tìm thấy bản ghi vật tư.' });
+    }
+    const oldData = existing[0];
+    const currentUser = req.user?.ten_dang_nhap || req.user?.ho_ten || 'Hệ thống';
+
+    await db.query('DELETE FROM cong_trinh_vat_tu_truc_tiep WHERE id = ?', [id]);
+
+    try {
+      await logChange(
+        db,
+        'cong_trinh_vat_tu_truc_tiep',
+        id,
+        'XOA',
+        oldData,
+        null,
+        currentUser
+      );
+    } catch (logErr) {
+      console.warn('Could not log direct material delete:', logErr.message);
+    }
+
+    res.json({ message: 'Đã xóa vật tư trực tiếp thành công!' });
+  } catch (err) {
+    console.error('Error deleting direct material:', err);
+    res.status(500).json({ message: 'Lỗi xóa vật tư trực tiếp: ' + err.message });
   }
 });
 

@@ -9,17 +9,29 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
+const ALLOWED_UPLOAD_EXTS = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.png', '.jpg', '.jpeg', '.webp', '.dwg', '.txt'];
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, uploadsDir);
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    const ext = path.extname(file.originalname) || '.jpg';
+    const ext = (path.extname(file.originalname) || '.jpg').toLowerCase();
     cb(null, 'file-' + uniqueSuffix + ext);
   }
 });
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB
+  fileFilter: (req, file, cb) => {
+    const ext = (path.extname(file.originalname) || '').toLowerCase();
+    if (!ALLOWED_UPLOAD_EXTS.includes(ext)) {
+      return cb(new Error('Định dạng tệp không được phép. Chỉ chấp nhận tài liệu (.pdf, .doc, .docx, .xls, .xlsx, .dwg) và hình ảnh (.png, .jpg, .jpeg, .webp).'));
+    }
+    cb(null, true);
+  }
+});
 
 const { pool } = require('../config/db');
 const { authMiddleware, authorize } = require('../middleware/auth');
@@ -112,7 +124,7 @@ router.get('/danh-muc-loai-xe', authMiddleware, async (req, res) => {
 });
 
 // 0b. Create Vehicle Category
-router.post('/danh-muc-loai-xe', authMiddleware, authorize(['Kinh_Doanh', 'Ban_Giam_Doc', 'Admin']), async (req, res) => {
+router.post('/danh-muc-loai-xe', authMiddleware, authorize(['Kinh_Doanh', 'Ban_Giam_Doc', 'Admin', 'Vat_Tu', 'Ke_Toan']), async (req, res) => {
   const { ten_loai_xe, mo_ta } = req.body;
   if (!ten_loai_xe) {
     return res.status(400).json({ message: 'Tên loại xe không được để trống.' });
@@ -542,7 +554,7 @@ const getFuelReport = async (req, res) => {
 router.get('/bao-cao-xang-dau', authMiddleware, getFuelReport);
 
 // 6. Generic File Removal Endpoint
-router.delete('/files/:id', authMiddleware, async (req, res) => {
+router.delete('/files/:id', authMiddleware, authorize(['Admin', 'Ban_Giam_Doc', 'Ke_Toan', 'Doi_Xe']), async (req, res) => {
   const { id } = req.params;
   try {
     const [rows] = await pool.query('SELECT * FROM files WHERE id = ?', [id]);

@@ -1,7 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const { pool } = require('../config/db');
-const { authMiddleware } = require('../middleware/auth');
+const { authMiddleware, authorize } = require('../middleware/auth');
+
+// Protect all audit logs: only Admin and Ban_Giam_Doc can view
+router.use(authMiddleware);
+router.use(authorize(['Admin', 'Ban_Giam_Doc']));
 
 // Safe JSON parser to prevent crashes on non-JSON strings
 const safeJsonParse = (val) => {

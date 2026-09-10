@@ -14,17 +14,29 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
+const ALLOWED_UPLOAD_EXTS = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.png', '.jpg', '.jpeg', '.webp', '.dwg', '.txt'];
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, uploadsDir);
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    const ext = path.extname(file.originalname);
+    const ext = path.extname(file.originalname).toLowerCase();
     cb(null, 'mat-' + uniqueSuffix + ext);
   }
 });
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (!ALLOWED_UPLOAD_EXTS.includes(ext)) {
+      return cb(new Error('Định dạng tệp không được phép. Chỉ chấp nhận tài liệu (.pdf, .doc, .docx, .xls, .xlsx, .dwg) và hình ảnh (.png, .jpg, .jpeg, .webp).'));
+    }
+    cb(null, true);
+  }
+});
 
 // Helper to save uploaded files into the `files` table
 async function saveUploadedFiles(connection, ten_bang, id_ban_ghi, reqFiles, nguoi_tao) {
@@ -1367,7 +1379,7 @@ router.get('/phieu-xuat-kho/:id', authMiddleware, async (req, res) => {
 });
 
 // 4. Cancel & Revert Export Voucher (Hủy phiếu xuất kho & hoàn tồn kho)
-router.put('/phieu-xuat-kho/:id/huy', authMiddleware, async (req, res) => {
+router.put('/phieu-xuat-kho/:id/huy', authMiddleware, authorize(['Admin', 'Ban_Giam_Doc', 'Ke_Toan', 'Thu_Kho']), async (req, res) => {
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
@@ -1836,7 +1848,7 @@ router.get('/phieu-nhap-kho/:id', authMiddleware, async (req, res) => {
 });
 
 // 5. POST Create phieu_nhap_kho (with optional file uploads)
-router.post('/phieu-nhap-kho', authMiddleware, upload.array('files'), async (req, res) => {
+router.post('/phieu-nhap-kho', authMiddleware, authorize(['Admin', 'Ban_Giam_Doc', 'Ke_Toan', 'Thu_Kho']), upload.array('files'), async (req, res) => {
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();

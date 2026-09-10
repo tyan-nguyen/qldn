@@ -5,13 +5,23 @@ const jwt = require('jsonwebtoken');
 const { pool } = require('../config/db');
 const { authMiddleware, authorize } = require('../middleware/auth');
 const { logChange } = require('../utils/logger');
+const rateLimit = require('express-rate-limit');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 
 const JWT_SECRET = process.env.JWT_SECRET || 'bv_secret_key_2026_jwt_token_secure';
 
+// Rate limiter for login: max 10 failed attempts per 15 minutes per IP
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: 'Bạn đã đăng nhập quá nhiều lần. Vui lòng thử lại sau 15 phút.' }
+});
+
 // Login route
-router.post('/login', async (req, res) => {
+router.post('/login', loginLimiter, async (req, res) => {
   const { ten_dang_nhap, mat_khau } = req.body;
 
   if (!ten_dang_nhap || !mat_khau) {
@@ -111,8 +121,20 @@ router.get('/login-history', authMiddleware, authorize(['Admin']), async (req, r
   }
 });
 
-// Register new user (For admin creation or initial setups)
-router.post('/register', async (req, res) => {
+// Register new user (Strictly requires Admin authorization unless database is completely empty)
+router.post('/register', async (req, res, next) => {
+  try {
+    const [users] = await pool.query('SELECT id FROM nguoi_dung LIMIT 1');
+    if (users.length > 0) {
+      return authMiddleware(req, res, () => {
+        authorize(['Admin'])(req, res, next);
+      });
+    }
+    next();
+  } catch (err) {
+    next(err);
+  }
+}, async (req, res) => {
   const { ten_dang_nhap, mat_khau, ho_ten, ho_ten_ngan, vai_tro } = req.body;
 
   if (!ten_dang_nhap || !mat_khau || !ho_ten || !vai_tro) {
@@ -136,7 +158,7 @@ router.post('/register', async (req, res) => {
     const [result] = await pool.query(
       `INSERT INTO nguoi_dung (ten_dang_nhap, mat_khau, ho_ten, ho_ten_ngan, vai_tro, nguoi_tao) 
        VALUES (?, ?, ?, ?, ?, ?)`,
-      [ten_dang_nhap, hashedPassword, ho_ten, ho_ten_ngan || null, vai_tro, 'Hệ thống']
+      [ten_dang_nhap, hashedPassword, ho_ten, ho_ten_ngan || null, vai_tro, req.user?.ten_dang_nhap || 'Hệ thống']
     );
 
     return res.status(201).json({

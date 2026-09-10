@@ -679,7 +679,7 @@ router.get('/:id/boq/variance-report', authMiddleware, async (req, res) => {
     );
 
     // 4. Actual Costs per Category:
-    // 4.1. Material Costs (phieu_xuat_kho + phieu_mua_hang giao thang)
+    // 4.1. Material Costs (phieu_xuat_kho + phieu_mua_hang giao thang + vat tu truc tiep)
     const [matExportRows] = await pool.query(
       `SELECT COALESCE(SUM(COALESCE(ct.thanh_tien, ct.so_luong * ct.don_gia, 0)), 0) AS total_xuat
        FROM phieu_xuat_kho_chi_tiet ct
@@ -693,7 +693,13 @@ router.get('/:id/boq/variance-report', authMiddleware, async (req, res) => {
        WHERE pmh.id_cong_trinh = ?`,
       [projId]
     );
-    const actualMaterialCost = (parseFloat(matExportRows[0]?.total_xuat) || 0) + (parseFloat(matPORows[0]?.total_po) || 0);
+    const [matDirectRows] = await pool.query(
+      `SELECT COALESCE(SUM(thanh_tien), 0) AS total_direct
+       FROM cong_trinh_vat_tu_truc_tiep
+       WHERE id_cong_trinh = ?`,
+      [projId]
+    );
+    const actualMaterialCost = (parseFloat(matExportRows[0]?.total_xuat) || 0) + (parseFloat(matPORows[0]?.total_po) || 0) + (parseFloat(matDirectRows[0]?.total_direct) || 0);
 
     // Query exact actual material consumption grouped by id_danh_muc_vat_tu
     const [actualMatSummaryRows] = await pool.query(
@@ -721,10 +727,18 @@ router.get('/:id/boq/variance-report', authMiddleware, async (req, res) => {
          JOIN phieu_mua_hang pm ON pmct.id_phieu_mua_hang = pm.id
          WHERE pm.id_cong_trinh = ?
            AND (pm.trang_thai_giao_hang <> 'Đã hủy' OR pm.trang_thai_giao_hang IS NULL)
+         UNION ALL
+         SELECT 
+           id_danh_muc_vat_tu,
+           COALESCE(so_luong, 0) AS so_luong,
+           COALESCE(don_gia, 0) AS don_gia,
+           COALESCE(thanh_tien, (so_luong * don_gia), 0) AS thanh_tien
+         FROM cong_trinh_vat_tu_truc_tiep
+         WHERE id_cong_trinh = ?
        ) c
        WHERE c.id_danh_muc_vat_tu IS NOT NULL
        GROUP BY c.id_danh_muc_vat_tu`,
-      [projId, projId]
+      [projId, projId, projId]
     );
 
     const actualMatMap = {};
@@ -1409,7 +1423,7 @@ router.get('/:id/bao-cao-hieu-qua', authMiddleware, async (req, res) => {
     if (req.query.chi_phi_tim_viec_co_dinh !== undefined) chiPhiTimViecCoDinh = parseFloat(req.query.chi_phi_tim_viec_co_dinh) || 0;
     if (req.query.loai_tinh_tim_viec !== undefined) loaiTinhTimViec = req.query.loai_tinh_tim_viec;
 
-    // 3. Query Actual Material Costs (phieu_xuat_kho + phieu_mua_hang giao thang)
+    // 3. Query Actual Material Costs (phieu_xuat_kho + phieu_mua_hang giao thang + vat tu truc tiep)
     const [matExportRows] = await pool.query(
       `SELECT COALESCE(SUM(COALESCE(ct.thanh_tien, ct.so_luong * ct.don_gia, 0)), 0) AS total_xuat
        FROM phieu_xuat_kho_chi_tiet ct
@@ -1423,7 +1437,13 @@ router.get('/:id/bao-cao-hieu-qua', authMiddleware, async (req, res) => {
        WHERE pmh.id_cong_trinh = ?`,
       [projId]
     );
-    const chiPhiVatTu = (parseFloat(matExportRows[0]?.total_xuat) || 0) + (parseFloat(matPORows[0]?.total_po) || 0);
+    const [matDirectRows] = await pool.query(
+      `SELECT COALESCE(SUM(thanh_tien), 0) AS total_direct
+       FROM cong_trinh_vat_tu_truc_tiep
+       WHERE id_cong_trinh = ?`,
+      [projId]
+    );
+    const chiPhiVatTu = (parseFloat(matExportRows[0]?.total_xuat) || 0) + (parseFloat(matPORows[0]?.total_po) || 0) + (parseFloat(matDirectRows[0]?.total_direct) || 0);
 
     // 4. Query Actual Labor Costs
     const [laborRows] = await pool.query(
@@ -1629,14 +1649,16 @@ router.get('/:id/bao-cao-tong-hop-vat-tu-chi-phi', authMiddleware, async (req, r
     const [matRows] = await pool.query(
       `SELECT 
          c.id_danh_muc_vat_tu,
-         v.ma_vat_tu,
-         COALESCE(v.ten_vat_tu, 'Vật tư thi công') AS ten_vat_tu,
+         COALESCE(v.ma_vat_tu, c.ma_vat_tu, '') AS ma_vat_tu,
+         COALESCE(v.ten_vat_tu, c.ten_vat_tu, 'Vật tư thi công') AS ten_vat_tu,
          COALESCE(v.don_vi_tinh, c.don_vi_tinh, '') AS don_vi_tinh,
          SUM(c.so_luong) AS so_luong,
          SUM(c.thanh_tien) AS thanh_tien
        FROM (
          SELECT 
            pxct.id_danh_muc_vat_tu,
+           '' AS ma_vat_tu,
+           '' AS ten_vat_tu,
            COALESCE(pxct.don_vi_tinh, '') AS don_vi_tinh,
            COALESCE(pxct.so_luong_xuat, pxct.so_luong, 0) AS so_luong,
            COALESCE(pxct.thanh_tien, (COALESCE(pxct.so_luong_xuat, pxct.so_luong, 0) * COALESCE(pxct.don_gia, 0))) AS thanh_tien
@@ -1647,6 +1669,8 @@ router.get('/:id/bao-cao-tong-hop-vat-tu-chi-phi', authMiddleware, async (req, r
          UNION ALL
          SELECT 
            pmct.id_danh_muc_vat_tu,
+           '' AS ma_vat_tu,
+           '' AS ten_vat_tu,
            COALESCE(pmct.don_vi_tinh, '') AS don_vi_tinh,
            COALESCE(pmct.so_luong_nhan_thuc_te, pmct.so_luong_mua, 0) AS so_luong,
            COALESCE(pmct.thanh_tien, (COALESCE(pmct.so_luong_nhan_thuc_te, pmct.so_luong_mua, 0) * COALESCE(pmct.don_gia, 0))) AS thanh_tien
@@ -1654,12 +1678,22 @@ router.get('/:id/bao-cao-tong-hop-vat-tu-chi-phi', authMiddleware, async (req, r
          JOIN phieu_mua_hang pm ON pmct.id_phieu_mua_hang = pm.id
          WHERE pm.id_cong_trinh = ?
            AND (pm.trang_thai_giao_hang <> 'Đã hủy' OR pm.trang_thai_giao_hang IS NULL)
+         UNION ALL
+         SELECT 
+           id_danh_muc_vat_tu,
+           COALESCE(ma_vat_tu, '') AS ma_vat_tu,
+           COALESCE(ten_vat_tu, '') AS ten_vat_tu,
+           COALESCE(don_vi_tinh, '') AS don_vi_tinh,
+           COALESCE(so_luong, 0) AS so_luong,
+           COALESCE(thanh_tien, (so_luong * don_gia), 0) AS thanh_tien
+         FROM cong_trinh_vat_tu_truc_tiep
+         WHERE id_cong_trinh = ?
        ) c
        LEFT JOIN danh_muc_vat_tu v ON c.id_danh_muc_vat_tu = v.id
-       GROUP BY c.id_danh_muc_vat_tu, v.ma_vat_tu, v.ten_vat_tu, COALESCE(v.don_vi_tinh, c.don_vi_tinh, '')
+       GROUP BY c.id_danh_muc_vat_tu, COALESCE(v.ma_vat_tu, c.ma_vat_tu, ''), COALESCE(v.ten_vat_tu, c.ten_vat_tu, 'Vật tư thi công'), COALESCE(v.don_vi_tinh, c.don_vi_tinh, '')
        HAVING SUM(c.so_luong) > 0 OR SUM(c.thanh_tien) > 0
-       ORDER BY v.ten_vat_tu ASC`,
-      [projId, projId]
+       ORDER BY COALESCE(v.ten_vat_tu, c.ten_vat_tu) ASC`,
+      [projId, projId, projId]
     );
 
     if (matRows.length > 0) {

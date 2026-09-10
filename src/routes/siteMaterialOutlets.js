@@ -1,7 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const { pool: db } = require('../config/db');
+const { authMiddleware, authorize } = require('../middleware/auth');
 const { generateSequenceNumber } = require('../services/sequenceService');
+
+// Protect all Site Material Outlet routes with authentication
+router.use(authMiddleware);
 
 // --- 1. KHO TẠM CÔNG TRÌNH (Vật tư hiện có tại công trình) ---
 router.get('/ton-kho-cong-trinh', async (req, res) => {
@@ -62,7 +66,7 @@ router.get('/su-dung', async (req, res) => {
   }
 });
 
-router.post('/su-dung', async (req, res) => {
+router.post('/su-dung', authorize(['Admin', 'Ban_Giam_Doc', 'Chi_Huy_Truong', 'Ky_Thuat', 'Vat_Tu']), async (req, res) => {
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
@@ -153,7 +157,7 @@ router.get('/tra-lai', async (req, res) => {
   }
 });
 
-router.post('/tra-lai', async (req, res) => {
+router.post('/tra-lai', authorize(['Admin', 'Ban_Giam_Doc', 'Chi_Huy_Truong', 'Thu_Kho', 'Vat_Tu']), async (req, res) => {
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
@@ -199,7 +203,7 @@ router.post('/tra-lai', async (req, res) => {
 });
 
 // Confirm warehouse receipt for Return slip -> Reduces site stock & INCREASES COMPANY WAREHOUSE STOCK
-router.patch('/tra-lai/:id/xac-nhan', async (req, res) => {
+router.patch('/tra-lai/:id/xac-nhan', authorize(['Admin', 'Ban_Giam_Doc', 'Thu_Kho', 'Ke_Toan']), async (req, res) => {
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
@@ -283,7 +287,7 @@ router.get('/hao-hut', async (req, res) => {
   }
 });
 
-router.post('/hao-hut', async (req, res) => {
+router.post('/hao-hut', authorize(['Admin', 'Ban_Giam_Doc', 'Chi_Huy_Truong', 'Ky_Thuat', 'Vat_Tu']), async (req, res) => {
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
@@ -329,7 +333,7 @@ router.post('/hao-hut', async (req, res) => {
 });
 
 // Approve Wastage -> Deducts site virtual stock by increasing so_luong_hao_hut
-router.patch('/hao-hut/:id/duyet', async (req, res) => {
+router.patch('/hao-hut/:id/duyet', authorize(['Admin', 'Ban_Giam_Doc', 'Ke_Toan']), async (req, res) => {
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();

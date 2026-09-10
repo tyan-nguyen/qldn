@@ -384,6 +384,34 @@ async function initializeDatabase() {
         console.warn('Could not initialize thong_bao_de_nghi_thanh_toan table:', tbErr.message);
       }
 
+      // Ensure cong_trinh_vat_tu_truc_tiep table exists
+      try {
+        await connection.query(`
+          CREATE TABLE IF NOT EXISTS cong_trinh_vat_tu_truc_tiep (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            id_cong_trinh INT NOT NULL,
+            id_danh_muc_vat_tu INT NULL,
+            ma_vat_tu VARCHAR(50) NULL,
+            ten_vat_tu VARCHAR(255) NOT NULL,
+            don_vi_tinh VARCHAR(50) NOT NULL,
+            so_luong DECIMAL(15, 3) NOT NULL,
+            don_gia DECIMAL(15, 2) NOT NULL DEFAULT 0,
+            thanh_tien DECIMAL(15, 2) NOT NULL DEFAULT 0,
+            ngay_ghi_nhan DATE NOT NULL,
+            nha_cung_cap VARCHAR(255) NULL,
+            so_chung_tu VARCHAR(100) NULL,
+            ghi_chu TEXT NULL,
+            nguoi_tao VARCHAR(100) NOT NULL,
+            thoi_gian_tao DATETIME DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_ctvt_cong_trinh (id_cong_trinh),
+            INDEX idx_ctvt_vat_tu (id_danh_muc_vat_tu)
+          );
+        `);
+        console.log('Successfully created/checked cong_trinh_vat_tu_truc_tiep table.');
+      } catch (ctvtErr) {
+        console.warn('Could not create cong_trinh_vat_tu_truc_tiep table: ', ctvtErr.message);
+      }
+
       // Seed default users if table is empty
       const [users] = await connection.query('SELECT id FROM nguoi_dung LIMIT 1');
       if (users.length === 0) {

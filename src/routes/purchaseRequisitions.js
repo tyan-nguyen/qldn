@@ -1,7 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const { pool: db } = require('../config/db');
+const { authMiddleware, authorize } = require('../middleware/auth');
 const { generateSequenceNumber } = require('../services/sequenceService');
+
+// Protect all Purchase Requisitions routes
+router.use(authMiddleware);
 
 // GET /api/yeu-cau-mua-hang/thong-bao/count: Count Requisitions Pending Approval
 router.get('/thong-bao/count', async (req, res) => {
@@ -152,7 +156,7 @@ router.get('/:id', async (req, res) => {
 });
 
 // POST /api/yeu-cau-mua-hang: Create Purchase Requisition (with Strict Limit Validation)
-router.post('/', async (req, res) => {
+router.post('/', authorize(['Admin', 'Ban_Giam_Doc', 'Ke_Toan', 'Vat_Tu', 'Ky_Thuat', 'Chi_Huy_Truong']), async (req, res) => {
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
@@ -272,7 +276,7 @@ router.post('/', async (req, res) => {
 });
 
 // PUT /api/yeu-cau-mua-hang/:id: Update Draft Purchase Requisition
-router.put('/:id', async (req, res) => {
+router.put('/:id', authorize(['Admin', 'Ban_Giam_Doc', 'Ke_Toan', 'Vat_Tu', 'Ky_Thuat', 'Chi_Huy_Truong']), async (req, res) => {
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
@@ -361,7 +365,7 @@ router.put('/:id', async (req, res) => {
 });
 
 // PATCH /api/yeu-cau-mua-hang/:id/gui-duyet: Submit Requisition for Approval
-router.patch('/:id/gui-duyet', async (req, res) => {
+router.patch('/:id/gui-duyet', authorize(['Admin', 'Ban_Giam_Doc', 'Ke_Toan', 'Vat_Tu', 'Ky_Thuat', 'Chi_Huy_Truong']), async (req, res) => {
   try {
     const { nguoi_gui } = req.body;
     const [rows] = await db.query('SELECT trang_thai FROM yeu_cau_mua_hang WHERE id = ?', [req.params.id]);
@@ -386,7 +390,7 @@ router.patch('/:id/gui-duyet', async (req, res) => {
 });
 
 // PATCH /api/yeu-cau-mua-hang/:id/duyet: Approve / Reject Requisition
-router.patch('/:id/duyet', async (req, res) => {
+router.patch('/:id/duyet', authorize(['Admin', 'Ban_Giam_Doc', 'Vat_Tu']), async (req, res) => {
   try {
     const { trang_thai, nguoi_duyet, noi_dung_duyet } = req.body;
 

@@ -30,6 +30,8 @@ function fixUtf8FileName(str) {
   }
 }
 
+const ALLOWED_UPLOAD_EXTS = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.png', '.jpg', '.jpeg', '.webp', '.dwg', '.txt'];
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, uploadsDir);
@@ -37,11 +39,22 @@ const storage = multer.diskStorage({
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
     const originalName = fixUtf8FileName(file.originalname);
-    const ext = path.extname(originalName) || path.extname(file.originalname);
+    const ext = (path.extname(originalName) || path.extname(file.originalname)).toLowerCase();
     cb(null, 'dntt-' + uniqueSuffix + ext);
   }
 });
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB
+  fileFilter: (req, file, cb) => {
+    const originalName = fixUtf8FileName(file.originalname);
+    const ext = (path.extname(originalName) || path.extname(file.originalname)).toLowerCase();
+    if (!ALLOWED_UPLOAD_EXTS.includes(ext)) {
+      return cb(new Error('Định dạng tệp không được phép. Chỉ chấp nhận tài liệu (.pdf, .doc, .docx, .xls, .xlsx, .dwg) và hình ảnh (.png, .jpg, .jpeg, .webp).'));
+    }
+    cb(null, true);
+  }
+});
 
 // Helper to create DNTT progress notification for requester
 async function createDnttNotification(connOrPool, id_dntt, ma_phieu, nguoi_nhan, loai_thong_bao, tieu_de, noi_dung) {
@@ -1015,6 +1028,15 @@ router.delete('/:id', authMiddleware, async (req, res) => {
 
     const dntt = rows[0];
 
+    // RBAC: Only creator or Admin/Ban_Giam_Doc/Ke_Toan can delete
+    const userRoles = Array.isArray(req.user.vai_tro) ? req.user.vai_tro : (req.user.vai_tro ? req.user.vai_tro.split(',') : []);
+    const canDelete = userRoles.includes('Admin') || userRoles.includes('Ban_Giam_Doc') || userRoles.includes('Ke_Toan') || (dntt.nguoi_tao === req.user.ten_dang_nhap);
+    if (!canDelete) {
+      await connection.rollback();
+      connection.release();
+      return res.status(403).json({ message: 'Bạn không có quyền xóa đề nghị thanh toán của người khác.' });
+    }
+
     // Check if already paid or has generated phieu_chi
     if (dntt.trang_thai === 'Da_Thanh_Toan' || dntt.id_phieu_thu_chi) {
       await connection.rollback();
@@ -1063,7 +1085,7 @@ router.delete('/:id', authMiddleware, async (req, res) => {
 // =========================================================================
 
 // PUT /api/de-nghi-thanh-toan/:id/tbp-duyet: Bước 2 - Trưởng bộ phận duyệt
-router.put('/:id/tbp-duyet', authMiddleware, async (req, res) => {
+router.put('/:id/tbp-duyet', authMiddleware, authorize(['Admin', 'Ban_Giam_Doc', 'Ke_Toan', 'Truong_Bo_Phan', 'Chi_Huy_Truong', 'Kinh_Doanh', 'Vat_Tu']), async (req, res) => {
   try {
     const { action, y_kien } = req.body; // action: 'approve' | 'reject' | 'skip'
     const id = req.params.id;

@@ -816,3 +816,24 @@ CREATE TABLE IF NOT EXISTS hop_dong_file (
     FOREIGN KEY (id_hop_dong) REFERENCES hop_dong(id) ON DELETE CASCADE
 );
 
+-- 44. Vật tư nhập trực tiếp công trình (Không qua kho và không qua phiếu mua hàng)
+CREATE TABLE IF NOT EXISTS cong_trinh_vat_tu_truc_tiep (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    id_cong_trinh INT NOT NULL,
+    id_danh_muc_vat_tu INT NULL,
+    ma_vat_tu VARCHAR(50) NULL,
+    ten_vat_tu VARCHAR(255) NOT NULL,
+    don_vi_tinh VARCHAR(50) NOT NULL,
+    so_luong DECIMAL(15, 3) NOT NULL,
+    don_gia DECIMAL(15, 2) NOT NULL DEFAULT 0,
+    thanh_tien DECIMAL(15, 2) NOT NULL DEFAULT 0,
+    ngay_ghi_nhan DATE NOT NULL,
+    nha_cung_cap VARCHAR(255) NULL,
+    so_chung_tu VARCHAR(100) NULL,
+    ghi_chu TEXT NULL,
+    nguoi_tao VARCHAR(100) NOT NULL,
+    thoi_gian_tao DATETIME DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_ctvt_cong_trinh (id_cong_trinh),
+    INDEX idx_ctvt_vat_tu (id_danh_muc_vat_tu),
+    FOREIGN KEY (id_cong_trinh) REFERENCES cong_trinh(id) ON DELETE CASCADE
+);

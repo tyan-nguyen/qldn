@@ -13,17 +13,30 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
+const ALLOWED_UPLOAD_EXTS = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.png', '.jpg', '.jpeg', '.webp', '.dwg', '.txt'];
+const ALLOWED_IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.webp'];
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, uploadsDir);
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    const ext = path.extname(file.originalname);
+    const ext = (path.extname(file.originalname) || '').toLowerCase();
     cb(null, 'ptc-' + uniqueSuffix + ext);
   }
 });
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB
+  fileFilter: (req, file, cb) => {
+    const ext = (path.extname(file.originalname) || '').toLowerCase();
+    if (!ALLOWED_UPLOAD_EXTS.includes(ext)) {
+      return cb(new Error('Định dạng tệp không được phép. Chỉ chấp nhận tài liệu và hình ảnh.'));
+    }
+    cb(null, true);
+  }
+});
 
 const logoUploadsDir = path.join(__dirname, '../../public/uploads/logos');
 if (!fs.existsSync(logoUploadsDir)) {
@@ -36,13 +49,20 @@ const logoStorage = multer.diskStorage({
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    const ext = path.extname(file.originalname);
+    const ext = (path.extname(file.originalname) || '').toLowerCase();
     cb(null, 'logo-' + uniqueSuffix + ext);
   }
 });
 const logoUpload = multer({
   storage: logoStorage,
-  limits: { fileSize: 10 * 1024 * 1024 }
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ext = (path.extname(file.originalname) || '').toLowerCase();
+    if (!ALLOWED_IMAGE_EXTS.includes(ext)) {
+      return cb(new Error('Định dạng logo không được phép. Chỉ chấp nhận .png, .jpg, .jpeg, .webp.'));
+    }
+    cb(null, true);
+  }
 });
 
 // Helper to save files to `files` table
@@ -2375,7 +2395,7 @@ router.get('/hop-dong-nhan-cong', authMiddleware, async (req, res) => {
   }
   try {
     const [rows] = await pool.query(
-      `SELECT h.*, nc.ho_ten AS ten_nhan_cong
+      `SELECT h.*, nc.ho_ten AS ten_nhan_cong, nc.so_cccd, nc.so_dien_thoai
        FROM hop_dong_nhan_cong h
        JOIN nhan_cong nc ON h.id_nhan_cong = nc.id
        WHERE h.id_cong_trinh = ?

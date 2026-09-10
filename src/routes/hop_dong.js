@@ -30,6 +30,8 @@ function fixUtf8FileName(str) {
   }
 }
 
+const ALLOWED_UPLOAD_EXTS = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.png', '.jpg', '.jpeg', '.webp', '.dwg', '.txt'];
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, uploadsDir);
@@ -37,11 +39,22 @@ const storage = multer.diskStorage({
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
     const cleanOriginalName = fixUtf8FileName(file.originalname);
-    const ext = path.extname(cleanOriginalName) || path.extname(file.originalname);
+    const ext = (path.extname(cleanOriginalName) || path.extname(file.originalname)).toLowerCase();
     cb(null, 'hd-' + uniqueSuffix + ext);
   }
 });
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB
+  fileFilter: (req, file, cb) => {
+    const cleanOriginalName = fixUtf8FileName(file.originalname);
+    const ext = (path.extname(cleanOriginalName) || path.extname(file.originalname)).toLowerCase();
+    if (!ALLOWED_UPLOAD_EXTS.includes(ext)) {
+      return cb(new Error('Định dạng tệp không được phép. Chỉ chấp nhận tài liệu (.pdf, .doc, .docx, .xls, .xlsx, .dwg) và hình ảnh (.png, .jpg, .jpeg, .webp).'));
+    }
+    cb(null, true);
+  }
+});
 
 // 1. Get Distinct Years of Contracts
 router.get('/years', authMiddleware, async (req, res) => {

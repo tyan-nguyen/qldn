@@ -20,8 +20,8 @@ router.get('/ho-so', authMiddleware, getLaborList);
 // 2. Create Labor (Kinh_Doanh, Ban_Giam_Doc) - sales handles loading crew
 const createLabor = async (req, res) => {
   const { ho_ten, so_dien_thoai, so_cccd, don_gia_luong_ngay, ten_to_doi, hinh_anh, ghi_chu } = req.body;
-  if (!ho_ten || !so_cccd) {
-    return res.status(400).json({ message: 'Họ tên và số CCCD là bắt buộc.' });
+  if (!ho_ten || !ho_ten.trim()) {
+    return res.status(400).json({ message: 'Họ tên nhân công là bắt buộc.' });
   }
 
   const connection = await pool.getConnection();
@@ -31,7 +31,16 @@ const createLabor = async (req, res) => {
     const [result] = await connection.query(
       `INSERT INTO nhan_cong (ho_ten, so_dien_thoai, so_cccd, don_gia_luong_ngay, ten_to_doi, hinh_anh, ghi_chu, nguoi_tao)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [ho_ten, so_dien_thoai || null, so_cccd, don_gia_luong_ngay || 0, ten_to_doi || null, hinh_anh || null, ghi_chu || null, req.user.ten_dang_nhap]
+      [
+        ho_ten.trim(),
+        so_dien_thoai ? so_dien_thoai.trim() : null,
+        so_cccd && so_cccd.trim() ? so_cccd.trim() : null,
+        don_gia_luong_ngay || 0,
+        ten_to_doi ? ten_to_doi.trim() : null,
+        hinh_anh || null,
+        ghi_chu ? ghi_chu.trim() : null,
+        req.user.ten_dang_nhap
+      ]
     );
 
     const [newRow] = await connection.query('SELECT * FROM nhan_cong WHERE id = ?', [result.insertId]);
@@ -49,6 +58,165 @@ const createLabor = async (req, res) => {
 };
 router.post('/', authMiddleware, authorize(['Kinh_Doanh', 'Ban_Giam_Doc', 'Admin', 'Vat_Tu', 'Ke_Toan']), createLabor);
 router.post('/ho-so', authMiddleware, authorize(['Kinh_Doanh', 'Ban_Giam_Doc', 'Admin', 'Vat_Tu', 'Ke_Toan']), createLabor);
+
+// 2.1 Update Labor
+const updateLabor = async (req, res) => {
+  const { id } = req.params;
+  const { ho_ten, so_dien_thoai, so_cccd, don_gia_luong_ngay, ten_to_doi, hinh_anh, ghi_chu } = req.body;
+
+  if (!ho_ten || !ho_ten.trim()) {
+    return res.status(400).json({ message: 'Họ tên nhân công là bắt buộc.' });
+  }
+
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    const [existing] = await connection.query('SELECT * FROM nhan_cong WHERE id = ?', [id]);
+    if (existing.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ message: 'Không tìm thấy hồ sơ nhân công.' });
+    }
+    const oldRow = existing[0];
+
+    await connection.query(
+      `UPDATE nhan_cong 
+       SET ho_ten = ?, so_dien_thoai = ?, so_cccd = ?, don_gia_luong_ngay = ?, ten_to_doi = ?, hinh_anh = ?, ghi_chu = ?
+       WHERE id = ?`,
+      [
+        ho_ten.trim(),
+        so_dien_thoai ? so_dien_thoai.trim() : null,
+        so_cccd && so_cccd.trim() ? so_cccd.trim() : null,
+        don_gia_luong_ngay !== undefined && don_gia_luong_ngay !== '' ? parseFloat(don_gia_luong_ngay) || 0 : 0,
+        ten_to_doi ? ten_to_doi.trim() : null,
+        hinh_anh || null,
+        ghi_chu ? ghi_chu.trim() : null,
+        id
+      ]
+    );
+
+    const [newRow] = await connection.query('SELECT * FROM nhan_cong WHERE id = ?', [id]);
+    await logChange(connection, 'nhan_cong', id, 'CAP_NHAT', oldRow, newRow[0], req.user.ten_dang_nhap);
+
+    await connection.commit();
+    return res.json({
+      message: 'Cập nhật hồ sơ nhân công thành công.',
+      data: newRow[0]
+    });
+  } catch (err) {
+    await connection.rollback();
+    console.error('Lỗi khi cập nhật hồ sơ nhân công:', err);
+    return res.status(500).json({ message: 'Lỗi khi cập nhật hồ sơ nhân công.' });
+  } finally {
+    connection.release();
+  }
+};
+router.put('/:id', authMiddleware, authorize(['Kinh_Doanh', 'Ban_Giam_Doc', 'Admin', 'Vat_Tu', 'Ke_Toan']), updateLabor);
+router.put('/ho-so/:id', authMiddleware, authorize(['Kinh_Doanh', 'Ban_Giam_Doc', 'Admin', 'Vat_Tu', 'Ke_Toan']), updateLabor);
+
+// 2.2 Delete Labor with relational constraint checks
+const deleteLabor = async (req, res) => {
+  const { id } = req.params;
+
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    const [existing] = await connection.query('SELECT * FROM nhan_cong WHERE id = ?', [id]);
+    if (existing.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ message: 'Không tìm thấy hồ sơ nhân công cần xóa.' });
+    }
+    const worker = existing[0];
+
+    // Check related tables
+    const relatedChecks = [];
+
+    // 1. Chấm công hàng ngày
+    try {
+      const [[{ cnt: chamCongCnt }]] = await connection.query(
+        'SELECT COUNT(*) as cnt FROM cham_cong_hang_ngay WHERE id_nhan_cong = ?', [id]
+      );
+      if (chamCongCnt > 0) relatedChecks.push(`${chamCongCnt} lượt chấm công hàng ngày`);
+    } catch (e) {
+      console.warn('Check cham_cong_hang_ngay error:', e.message);
+    }
+
+    // 2. Hợp đồng giao khoán công trình
+    try {
+      const [[{ cnt: hopDongCnt }]] = await connection.query(
+        'SELECT COUNT(*) as cnt FROM hop_dong_nhan_cong WHERE id_nhan_cong = ?', [id]
+      );
+      if (hopDongCnt > 0) relatedChecks.push(`${hopDongCnt} hợp đồng giao khoán công trình`);
+    } catch (e) {
+      console.warn('Check hop_dong_nhan_cong error:', e.message);
+    }
+
+    // 3. Lương sản phẩm khoán
+    try {
+      const [[{ cnt: luongSpCnt }]] = await connection.query(
+        'SELECT COUNT(*) as cnt FROM luong_san_pham WHERE id_nhan_cong = ?', [id]
+      );
+      if (luongSpCnt > 0) relatedChecks.push(`${luongSpCnt} bản ghi lương sản phẩm khoán`);
+    } catch (e) {
+      console.warn('Check luong_san_pham error:', e.message);
+    }
+
+    // 4. Tạm ứng nhân công
+    try {
+      const [[{ cnt: tamUngCnt }]] = await connection.query(
+        'SELECT COUNT(*) as cnt FROM tam_ung_nhan_cong WHERE id_nhan_cong = ?', [id]
+      );
+      if (tamUngCnt > 0) relatedChecks.push(`${tamUngCnt} phiếu tạm ứng nhân công`);
+    } catch (e) {
+      console.warn('Check tam_ung_nhan_cong error:', e.message);
+    }
+
+    // 5. Phiếu chi lương
+    try {
+      const [[{ cnt: phieuLuongCnt }]] = await connection.query(
+        'SELECT COUNT(*) as cnt FROM phieu_chi_luong WHERE id_nhan_cong = ?', [id]
+      );
+      if (phieuLuongCnt > 0) relatedChecks.push(`${phieuLuongCnt} phiếu chi lương kỳ`);
+    } catch (e) {
+      console.warn('Check phieu_chi_luong error:', e.message);
+    }
+
+    // 6. Nhật ký nhiên liệu xe (nếu làm tài xế)
+    try {
+      const [[{ cnt: nhienLieuCnt }]] = await connection.query(
+        'SELECT COUNT(*) as cnt FROM nhat_ky_nhien_lieu WHERE id_nhan_cong = ?', [id]
+      );
+      if (nhienLieuCnt > 0) relatedChecks.push(`${nhienLieuCnt} nhật ký nhiên liệu lái xe`);
+    } catch (e) {
+      console.warn('Check nhat_ky_nhien_lieu error:', e.message);
+    }
+
+    // If any related data exists, abort deletion and return warning
+    if (relatedChecks.length > 0) {
+      await connection.rollback();
+      return res.status(400).json({
+        message: `Không thể xóa nhân công "${worker.ho_ten}" do đã phát sinh dữ liệu liên quan:\n• ` + relatedChecks.join('\n• ') + '\n\nVui lòng kiểm tra và xử lý các dữ liệu liên quan trước khi xóa!',
+        relatedDetails: relatedChecks
+      });
+    }
+
+    // Proceed to delete
+    await connection.query('DELETE FROM nhan_cong WHERE id = ?', [id]);
+    await logChange(connection, 'nhan_cong', id, 'XOA', worker, null, req.user.ten_dang_nhap);
+
+    await connection.commit();
+    return res.json({ message: `Đã xóa hồ sơ nhân công "${worker.ho_ten}" thành công.` });
+  } catch (err) {
+    await connection.rollback();
+    console.error('Lỗi khi xóa nhân công:', err);
+    return res.status(500).json({ message: 'Lỗi máy chủ khi xóa hồ sơ nhân công.' });
+  } finally {
+    connection.release();
+  }
+};
+router.delete('/:id', authMiddleware, authorize(['Kinh_Doanh', 'Ban_Giam_Doc', 'Admin', 'Ke_Toan']), deleteLabor);
+router.delete('/ho-so/:id', authMiddleware, authorize(['Kinh_Doanh', 'Ban_Giam_Doc', 'Admin', 'Ke_Toan']), deleteLabor);
 
 
 
